@@ -315,6 +315,7 @@ class Handler : public std::enable_shared_from_this<Handler>
     uint16_t connectRetryCount{0};
 };
 
+/*
 // NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
 static boost::container::flat_map<crow::streaming_response::Connection*,
                                   std::shared_ptr<Handler>>
@@ -339,11 +340,45 @@ inline void resetHandlers()
                                 handler->second->dumpType);
         }
     }
+}*/
+
+inline void handleLogServicesSystemDumpEntryDownloadGet(
+    crow::App& app, const std::string& dumpType, const crow::Request& req,
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+    const std::string& dumpId)
+{
+    BMCWEB_LOG_ERROR("*** Inside handleLogServicesSystemDumpEntryDownloadGet");
+    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
+    {
+        return;
+    }
+    // Generating random id to create unique socket file
+    // for each dump offload request
+    std::random_device rd;
+    std::default_random_engine gen(rd());
+    std::uniform_int_distribution<> dist{0, 1024};
+    std::string unixSocketPath = std::string(unixSocketPathDir) + dumpType +
+                                 "_dump_" + std::to_string(dist(gen));
+
+    if (!crow::ibm_utils::createDirectory(unixSocketPathDir))
+    {
+        BMCWEB_LOG_CRITICAL("**** CreateDir failed");
+        return;
+    }
+    BMCWEB_LOG_CRITICAL("INFO: {}  dump id {} offload initiated by: ",
+                        dumpType, entryID, req.session->clientIp);
+    getDumpSize(dumpId, dumpType);
 }
 
 inline void requestRoutes(App& app)
 {
     BMCWEB_ROUTE(
+      app,        
+      "/redfish/v1/Systems/system/LogServices/Dump/Entries/<str>/attachment/")
+      .privileges(redfish::privileges::getLogEntry)
+      .methods(boost::beast::http::verb::get)(std::bind_front(
+          handleLogServicesSystemDumpEntryDownloadGet, std::ref(app), "System"));
+    /*BMCWEB_ROUTE(
         app,
         "/redfish/v1/Systems/system/LogServices/Dump/Entries/<str>/attachment/")
         .privileges({{"ConfigureComponents", "ConfigureManager"}})
@@ -380,8 +415,8 @@ inline void requestRoutes(App& app)
         // entries would be listed as System_<id> and Resource_<id> for
         // the respective dumps. Hence the dump id and type are being
         // extracted here from the above format.
-        std::string dumpId;
-        std::string dumpType;
+        std::string dumpIdi {dumpEntry};
+        std::string dumpType {"System"};
         std::size_t idPos = dumpEntry.rfind('_');
 
         if (idPos != std::string::npos)
@@ -409,11 +444,12 @@ inline void requestRoutes(App& app)
             systemHandlers[&conn]->connection->sendStreamErrorStatus(
                 boost::beast::http::status::not_found);
             systemHandlers[&conn]->connection->close();
+	    BMCWEB_LOG_CRITICAL("**** CreaDir failed");
             return;
         }
         BMCWEB_LOG_CRITICAL("INFO: {}  dump id {} offload initiated by: ",
                             dumpType, dumpId, conn.req.session->clientIp);
-        systemHandlers[&conn]->getDumpSize(dumpId, dumpType);
+	systemHandlers[&conn]->getDumpSize(dumpId, dumpType);
     }).onclose([](crow::streaming_response::Connection& conn, bool& status) {
         auto handler = systemHandlers.find(&conn);
         if (handler == systemHandlers.end())
@@ -428,7 +464,7 @@ inline void requestRoutes(App& app)
         }
         handler->second->outputBuffer.clear();
         systemHandlers.clear();
-    });
+    });*/
 }
 
 } // namespace obmc_dump

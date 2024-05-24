@@ -28,6 +28,7 @@
 #include "event_service.hpp"
 #include "eventservice_sse.hpp"
 #include "fabric_adapters.hpp"
+#include "fabric_ports.hpp"
 #include "fan.hpp"
 #include "hypervisor_system.hpp"
 #include "license_service.hpp"
@@ -175,6 +176,13 @@ class RedfishService
         requestRoutesBMCJournalLogEntry(app);
 #endif
 
+#ifdef BMCWEB_ENABLE_LINUX_AUDIT_EVENTS
+        requestRoutesAuditLogService(app);
+        requestRoutesAuditLogEntry(app);
+        requestRoutesAuditLogEntryCollection(app);
+        requestRoutesFullAuditLogDownload(app);
+#endif
+
 #ifdef BMCWEB_ENABLE_REDFISH_CPU_LOG
         requestRoutesCrashdumpService(app);
         requestRoutesCrashdumpEntryCollection(app);
@@ -192,7 +200,7 @@ class RedfishService
         requestRoutesMemory(app);
 
         requestRoutesSystems(app);
-
+        requestRoutesSystemActionsOemExecutePanelFunction(app);
         requestRoutesBiosService(app);
         requestRoutesBiosSettings(app);
         requestRoutesBiosAttributeRegistry(app);
@@ -203,10 +211,17 @@ class RedfishService
 #endif // BMCWEB_ENABLE_VM_NBDPROXY
 
 #ifdef BMCWEB_ENABLE_REDFISH_DBUS_LOG_ENTRIES
+        requestRoutesCELogService(app);
         requestRoutesDBusLogServiceActionsClear(app);
+        requestRoutesDBusCELogServiceActionsClear(app);
         requestRoutesDBusEventLogEntryCollection(app);
+        requestRoutesDBusCELogEntryCollection(app);
         requestRoutesDBusEventLogEntry(app);
+        requestRoutesDBusCELogEntry(app);
         requestRoutesDBusEventLogEntryDownload(app);
+        requestRoutesDBusCEEventLogEntryDownload(app);
+        requestRoutesDBusEventLogEntryDownloadPelJson(app);
+        requestRoutesDBusCELogEntryDownloadPelJson(app);
 #endif
 #ifdef BMCWEB_ENABLE_REDFISH_LICENSE
         requestRoutesLicenseService(app);
@@ -247,10 +262,11 @@ class RedfishService
         requestRoutesEventDestination(app);
         requestRoutesFabricAdapters(app);
         requestRoutesFabricAdapterCollection(app);
+        requestRoutesFabricPort(app);
         requestRoutesSubmitTestEvent(app);
 
         requestRoutesHypervisorSystems(app);
-        crow::obmc_dump::requestRoutes(app);
+	crow::obmc_dump::requestRoutes(app);
 
         requestRoutesTelemetryService(app);
         requestRoutesMetricReportDefinitionCollection(app);

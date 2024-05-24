@@ -3,9 +3,8 @@
 #include "logging.hpp"
 #include "utils/hex_utils.hpp"
 
-#include <boost/asio/buffer.hpp>
-#include <boost/beast/core/flat_static_buffer.hpp>
-#include <boost/beast/http/basic_dynamic_body.hpp>
+#include <fcntl.h>
+
 #include <boost/beast/http/message.hpp>
 #include <boost/beast/http/message_generator.hpp>
 #include <boost/beast/http/string_body.hpp>
@@ -16,6 +15,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+
 namespace crow
 {
 
@@ -191,53 +191,55 @@ struct Response
                                       response);
     }
 
-    uint64_t getContentLength(boost::optional<uint64_t> pSize)
+    std::optional<uint64_t> size()
+    {
+        return response.body().payloadSize();
+    }
+
+    void preparePayload()
     {
         // This code is a throw-free equivalent to
         // beast::http::message::prepare_payload
+        std::optional<uint64_t> pSize = response.body().payloadSize();
+
         using http::status;
         using http::status_class;
         using http::to_status_class;
-        if (!pSize)
-        {
-            return 0;
-        }
         bool is1XXReturn = to_status_class(result()) ==
                            status_class::informational;
-        if (*pSize > 0 && (is1XXReturn || result() == status::no_content ||
-                           result() == status::not_modified))
+        if (!pSize)
+        {
+            response.chunked(true);
+            return;
+        }
+        response.content_length(*pSize);
+
+        if (is1XXReturn || result() == status::no_content ||
+            result() == status::not_modified)
         {
             BMCWEB_LOG_CRITICAL("{} Response content provided but code was "
                                 "no-content or not_modified, which aren't "
                                 "allowed to have a body",
                                 logPtr(this));
-            return 0;
+            response.content_length(0);
+            return;
         }
-        return *pSize;
-    }
-
-    uint64_t size()
-    {
-        return boost::variant2::visit(
-            [](auto&& res) -> uint64_t { return res.body().size(); }, response);
-    }
-
-    void preparePayload()
-    {
-        boost::variant2::visit(
-            [this](auto&& r) {
-            r.content_length(getContentLength(r.payload_size()));
-        },
-            response);
     }
 
     void clear()
     {
         BMCWEB_LOG_DEBUG("{} Clearing response containers", logPtr(this));
-        response.emplace<string_response>();
+        response.clear();
+        response.body().clear();
+
         jsonValue = nullptr;
         completed = false;
         expectedHash = std::nullopt;
+        /*BMCWEB_LOG_DEBUG("{} Clearing response containers", logPtr(this));
+        response.emplace<string_response>();
+        jsonValue = nullptr;
+        completed = false;
+        expectedHash = std::nullopt;*/
     }
 
     std::string computeEtag() const
@@ -258,7 +260,7 @@ struct Response
 
     void write(std::string&& bodyPart)
     {
-        string_response* str =
+/*        string_response* str =
             boost::variant2::get_if<string_response>(&response);
         if (str != nullptr)
         {
@@ -268,7 +270,8 @@ struct Response
         http::header<false> headTemp = std::move(fields());
         string_response& stringResponse =
             response.emplace<string_response>(std::move(headTemp));
-        stringResponse.body() = std::move(bodyPart);
+        stringResponse.body() = std::move(bodyPart);*/
+	response.body().str() = std::move(bodyPart);
     }
 
     void end()
@@ -287,6 +290,7 @@ struct Response
         }
     }
 
+    //**** NOT IN UPSTREAM
     bool isAlive() const
     {
         return isAliveHelper && isAliveHelper();
@@ -312,11 +316,13 @@ struct Response
         return ret;
     }
 
+    //**** NOT IN UPSTREAM
     void setIsAliveHelper(std::function<bool()>&& handler)
     {
         isAliveHelper = std::move(handler);
     }
 
+    //**** NOT IN UPSTREAM
     std::function<bool()> releaseIsAliveHelper()
     {
         std::function<bool()> ret = std::move(isAliveHelper);
@@ -370,20 +376,27 @@ struct Response
 
     bool openFd(int fd, bmcweb::EncodingType enc = bmcweb::EncodingType::Raw)
     {
-        file_response::body_type::value_type body(enc);
+        //file_response::body_type::value_type body(enc);
         boost::beast::error_code ec;
-        body.setFd(fd, ec);
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+        int retval = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+        if (retval == -1)
+        {
+            BMCWEB_LOG_ERROR("Setting O_NONBLOCK failed");
+        }
+        response.body().encodingType = enc;
+        response.body().setFd(fd, ec);
         if (ec)
         {
             BMCWEB_LOG_ERROR("Failed to set fd");
             return false;
         }
-        updateFileBody(std::move(body));
+        //updateFileBody(std::move(body));
         return true;
     }
 
   private:
-    void updateFileBody(file_response::body_type::value_type file)
+    /*void updateFileBody(file_response::body_type::value_type file)
     {
         // store the headers on stack temporarily so we can reconstruct the new
         // base with the old headers copied in.
@@ -391,122 +404,11 @@ struct Response
         file_response& fileResponse =
             response.emplace<file_response>(std::move(headTemp));
         fileResponse.body() = std::move(file);
-    }
+    }*/
 
     std::optional<std::string> expectedHash;
     bool completed = false;
     std::function<void(Response&)> completeRequestHandler;
     std::function<bool()> isAliveHelper;
 };
-
-struct DynamicResponse
-{
-    using response_type = boost::beast::http::response<
-        boost::beast::http::basic_dynamic_body<boost::beast::flat_static_buffer<
-            static_cast<std::size_t>(1024 * 1024)>>>;
-
-    std::optional<response_type> bufferResponse;
-
-    void addHeader(const std::string_view key, const std::string_view value)
-    {
-        bufferResponse->set(key, value);
-    }
-
-    void addHeader(boost::beast::http::field key, std::string_view value)
-    {
-        bufferResponse->set(key, value);
-    }
-
-    DynamicResponse() : bufferResponse(response_type{}) {}
-
-    ~DynamicResponse() = default;
-
-    DynamicResponse(const DynamicResponse&) = delete;
-
-    DynamicResponse(DynamicResponse&&) = delete;
-
-    DynamicResponse& operator=(const DynamicResponse& r) = delete;
-
-    DynamicResponse& operator=(DynamicResponse&& r) noexcept
-    {
-        BMCWEB_LOG_DEBUG("Moving response containers");
-        bufferResponse = std::move(r.bufferResponse);
-        r.bufferResponse.emplace(response_type{});
-        completed = r.completed;
-        return *this;
-    }
-
-    void result(boost::beast::http::status v)
-    {
-        bufferResponse->result(v);
-    }
-
-    boost::beast::http::status result()
-    {
-        return bufferResponse->result();
-    }
-
-    unsigned resultInt()
-    {
-        return bufferResponse->result_int();
-    }
-
-    std::string_view reason()
-    {
-        return bufferResponse->reason();
-    }
-
-    bool isCompleted() const noexcept
-    {
-        return completed;
-    }
-
-    void keepAlive(bool k)
-    {
-        bufferResponse->keep_alive(k);
-    }
-
-    bool keepAlive()
-    {
-        return bufferResponse->keep_alive();
-    }
-
-    void preparePayload()
-    {
-        bufferResponse->prepare_payload();
-    }
-
-    void clear()
-    {
-        bufferResponse.emplace(response_type{});
-        completed = false;
-    }
-
-    void end()
-    {
-        if (completed)
-        {
-            BMCWEB_LOG_DEBUG("Dynamic response was ended twice");
-            return;
-        }
-        completed = true;
-        BMCWEB_LOG_DEBUG("calling completion handler");
-        if (completeRequestHandler)
-        {
-            BMCWEB_LOG_DEBUG("completion handler was valid");
-            completeRequestHandler();
-        }
-    }
-
-    bool isAlive()
-    {
-        return isAliveHelper && isAliveHelper();
-    }
-    std::function<void()> completeRequestHandler;
-
-  private:
-    bool completed{};
-    std::function<bool()> isAliveHelper;
-};
-
 } // namespace crow
